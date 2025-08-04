@@ -271,7 +271,10 @@ def display_entities(entities):
             else:
                 # 沒有連結時只顯示純文字標籤
                 st.markdown(f'<span class="entity-tag">{dataset["name"]}</span>', 
-                           unsafe_allow_html=True)def main():
+                           unsafe_allow_html=True)
+
+
+def main():
     # 主標題
     st.markdown('<h1 class="main-header">🥤 新聞手搖飲分析器</h1>', unsafe_allow_html=True)
     
