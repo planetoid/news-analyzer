@@ -45,7 +45,7 @@ st.markdown("""
         border-radius: 10px;
         box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         margin: 0.5rem;
-        text-align: center;
+        text-align: left;
     }
     .entity-tag {
         display: inline-block;
