@@ -7,3 +7,8 @@ black>=23.0.0
 flake8>=6.0.0
 mypy>=1.0.0
 coverage>=7.0.0
+
+# 測試執行器額外依賴
+pandas>=1.5.0
+matplotlib>=3.6.0
+seaborn>=0.12.0
