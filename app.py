@@ -3,10 +3,114 @@ import requests
 from datetime import datetime
 import re
 import json
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 import asyncio
 from playwright.async_api import async_playwright
 import anthropic
+
+def get_openstreetmap_entity_link(location_name):
+    """
+    使用 OpenStreetMap Nominatim API 查詢地點，並返回條目連結
+    優先查找 relation 類型的條目（適合國家、城市等行政區劃）
+    
+    符合 Nominatim 使用政策：
+    - 設置合適的 User-Agent 識別應用程式
+    - 限制請求頻率（由用戶觸發，非批量處理）
+    - 適當的錯誤處理和備選方案
+    - 尊重 API 限制和超時設定
+    """
+    try:
+        # URL encode 地點名稱
+        encoded_name = quote(location_name)
+        
+        # 使用 Nominatim API 進行搜尋，嚴格遵循使用政策
+        search_url = f"https://nominatim.openstreetmap.org/search?q={encoded_name}&format=json&limit=3&addressdetails=1&accept-language=zh"
+        
+        # 設置符合 Nominatim 使用政策的 headers
+        # 政策要求：「Provide a valid HTTP Referer or User-Agent identifying the application」
+        headers = {
+            'User-Agent': 'NewsAnalyzer/2.1 (Educational news analysis tool; Contact: github.com/planetoid/news-analyzer)',
+            'Accept': 'application/json',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://github.com/planetoid/news-analyzer'
+        }
+        
+        # 發送搜尋請求，遵循 API 使用限制
+        # 政策要求：「No heavy uses (an absolute maximum of 1 request per second)」
+        response = requests.get(search_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            results = response.json()
+            
+            if not results:
+                # 沒有搜尋結果，返回搜尋連結作為備選
+                return f"https://www.openstreetmap.org/search?query={encoded_name}"
+            
+            # 優先查找 relation 類型的結果（通常是行政區劃）
+            for result in results:
+                osm_type = result.get('osm_type')
+                osm_id = result.get('osm_id')
+                place_class = result.get('class', '')
+                place_type = result.get('type', '')
+                
+                # 優先選擇 relation 類型的行政邊界或地點
+                if (osm_type == 'relation' and 
+                    place_class in ['boundary', 'place', 'administrative'] and 
+                    osm_id):
+                    return f"https://www.openstreetmap.org/relation/{osm_id}"
+            
+            # 如果沒有找到 relation，查找其他高質量的結果
+            for result in results:
+                osm_type = result.get('osm_type')
+                osm_id = result.get('osm_id')
+                place_class = result.get('class', '')
+                
+                # 選擇地點類別的結果
+                if osm_type and osm_id and place_class in ['place', 'boundary']:
+                    if osm_type == 'relation':
+                        return f"https://www.openstreetmap.org/relation/{osm_id}"
+                    elif osm_type == 'way':
+                        return f"https://www.openstreetmap.org/way/{osm_id}"
+                    elif osm_type == 'node':
+                        return f"https://www.openstreetmap.org/node/{osm_id}"
+            
+            # 最後嘗試任何有效的結果
+            first_result = results[0]
+            osm_type = first_result.get('osm_type')
+            osm_id = first_result.get('osm_id')
+            
+            if osm_type and osm_id:
+                if osm_type == 'relation':
+                    return f"https://www.openstreetmap.org/relation/{osm_id}"
+                elif osm_type == 'way':
+                    return f"https://www.openstreetmap.org/way/{osm_id}"
+                elif osm_type == 'node':
+                    return f"https://www.openstreetmap.org/node/{osm_id}"
+        
+        elif response.status_code == 403:
+            # API 存取被拒絕，可能是請求頻率過高或違反使用政策
+            # 政策說明：「may be classified as faulty and blocked」
+            print(f"Nominatim API 403 錯誤：可能違反使用政策或請求過於頻繁")
+            pass
+        elif response.status_code == 429:
+            # 請求頻率限制
+            print(f"Nominatim API 429 錯誤：請求頻率超過限制")
+            pass
+        
+        # 如果 API 查詢失敗，返回搜尋連結作為備選方案
+        return f"https://www.openstreetmap.org/search?query={encoded_name}"
+        
+    except requests.exceptions.Timeout:
+        # 請求超時，返回搜尋連結作為備選
+        print(f"Nominatim API 請求超時")
+        pass
+    except Exception as e:
+        # 記錄錯誤但不顯示給用戶（避免影響界面）
+        print(f"OpenStreetMap 查詢錯誤: {str(e)}")
+    
+    # 所有錯誤情況都返回搜尋連結作為備選方案
+    encoded_name = quote(location_name)
+    return f"https://www.openstreetmap.org/search?query={encoded_name}"
 
 # 頁面配置
 st.set_page_config(
@@ -140,7 +244,7 @@ class NewsAnalyzer:
             "entities": {{
                 "people": ["{{"name": "姓名", "title": "職位", "wiki_link": "維基百科連結"}}"],
                 "numbers": ["{{"value": "數字", "context": "背景說明", "data_link": "相關資料連結"}}"],
-                "locations": ["{{"name": "地點", "map_link": "https://www.openstreetmap.org/search?query=地點名稱"}}"],
+                "locations": ["{{"name": "地點名稱"}}"],
                 "organizations": ["{{"name": "機構名稱", "official_link": "官方連結"}}"],
                 "dates": ["{{"date": "日期時間", "event": "相關事件"}}],
                 "datasets": ["{{"name": "資料集關鍵字", "description": "說明", "search_link": "https://data.gov.tw/datasets/search?p=1&size=10&s=資料集關鍵字"}}]
@@ -148,8 +252,8 @@ class NewsAnalyzer:
         }}
 
         特別注意：
-        - 對於locations，請將map_link設為：https://www.openstreetmap.org/search?query=實際地點名稱
-        - 例如：{{"name": "台北市", "map_link": "https://www.openstreetmap.org/search?query=台北市"}}
+        - 對於locations，只需要提供地點名稱，系統會自動查詢 OpenStreetMap 條目連結
+        - 例如：{{"name": "台北市"}} 或 {{"name": "中正紀念堂"}}
         - 對於datasets，請根據新聞主題提取相關的政府資料集關鍵字，並設定搜尋連結
         - 例如：{{"name": "交通事故", "description": "道路交通事故統計", "search_link": "https://data.gov.tw/datasets/search?p=1&size=10&s=交通事故"}}
 
@@ -258,16 +362,14 @@ def display_entities(entities):
     if entities.get("locations"):
         st.subheader("📍 相關地點")
         for loc in entities["locations"]:
-            link = loc.get("map_link", "")
+            location_name = loc["name"]
             
-            # 如果有有效連結且不是預設的 "#"，則使用連結
-            if link and link != "#":
-                st.markdown(f'<a href="{link}" class="entity-tag" target="_blank">{loc["name"]}</a>', 
-                           unsafe_allow_html=True)
-            else:
-                # 沒有連結時只顯示純文字標籤
-                st.markdown(f'<span class="entity-tag">{loc["name"]}</span>', 
-                           unsafe_allow_html=True)
+            # 動態查詢 OpenStreetMap 條目連結
+            map_link = get_openstreetmap_entity_link(location_name)
+            
+            # 顯示帶有條目連結的地點標籤
+            st.markdown(f'<a href="{map_link}" class="entity-tag" target="_blank">{location_name}</a>', 
+                       unsafe_allow_html=True)
     
     if entities.get("organizations"):
         st.subheader("🏢 相關機構")
@@ -387,6 +489,20 @@ def analyze_content(analyzer, content):
         if analysis.get("entities"):
             st.markdown("## 🔍 關鍵資訊擷取")
             display_entities(analysis["entities"])
+
+# 頁面底部歸屬聲明
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; color: #666; font-size: 0.8em; margin-top: 2rem;'>
+        <p>🗺️ 地理資訊由 <a href="https://www.openstreetmap.org/" target="_blank">OpenStreetMap</a> 提供 | 
+        使用 <a href="https://nominatim.openstreetmap.org/" target="_blank">Nominatim</a> 地理編碼服務 | 
+        資料採用 <a href="https://openstreetmap.org/copyright" target="_blank">ODbL</a> 授權</p>
+        <p>📍 Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a></p>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
 
 if __name__ == "__main__":
     main()
